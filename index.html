@@ -105,6 +105,14 @@ main { margin-top: -40px; }
 .card h2 { margin: 0; font-size: 17px; font-weight: 700; }
 .card .note { margin: 2px 0 14px; color: var(--ink2); font-size: 13px; min-height: 20px; }
 
+.daybar { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0 12px; align-items: center; }
+.daybar input, .daybar button { font: inherit; font-size: 13.5px; color: var(--ink); background: var(--page); border: 1px solid var(--border); border-radius: 9px; padding: 6px 10px; min-height: 34px; }
+.daybar button { cursor: pointer; }
+.daybar button:hover { background: var(--wash); }
+.daybar button.alt { color: var(--s1); font-weight: 600; }
+.daybar input { direction: ltr; }
+.axis-cap { margin: 8px 0 0; color: var(--muted); font-size: 12px; text-align: center; }
+
 /* bar charts (HTML/CSS) */
 .plot { position: relative; height: 200px; margin-left: 40px; }
 .gl { position: absolute; left: 0; right: 0; height: 0; border-top: 1px solid var(--grid); }
@@ -220,9 +228,17 @@ td a:hover { text-decoration: underline; }
 
   <section class="charts">
     <div class="card">
-      <h2>التسجيلات حسب ساعة اليوم</h2>
+      <h2>التسجيلات ساعة بساعة في يوم محدد</h2>
+      <div class="daybar">
+        <button type="button" id="dayPrev">▶ اليوم السابق</button>
+        <input type="date" id="dayPick" aria-label="اختر اليوم">
+        <button type="button" id="dayNext">اليوم التالي ◀</button>
+        <button type="button" id="dayLatest" class="alt">أحدث يوم</button>
+        <button type="button" id="dayTop" class="alt">أكثر يوم تسجيلاً</button>
+      </div>
       <p class="note" id="hourNote"></p>
       <div id="hourChart"></div>
+      <p class="axis-cap">المحور الأفقي: الساعة (0–23) · العمودي: عدد التسجيلات في تلك الساعة</p>
     </div>
     <div class="card">
       <h2 id="dayTitle">التسجيلات حسب اليوم</h2>
@@ -312,7 +328,7 @@ let snapshot = 0, firstReg = Infinity, lastReg = 0;
 for (const r of rows) { if (r.lastT > snapshot) snapshot = r.lastT; if (r.regT < firstReg) firstReg = r.regT; if (r.regT > lastReg) lastReg = r.regT; }
 rows.forEach(r => { r.active30 = r.lastT >= snapshot - 30 * DAY; });
 
-const state = { q: '', op: '', st: '', sort: 'reg', dir: -1, page: 0 };
+const state = { q: '', op: '', st: '', sort: 'reg', dir: -1, page: 0, day: null };
 const PAGE = 25;
 let view = [];
 
@@ -342,12 +358,12 @@ function niceScale(max) {
   return { top, ticks };
 }
 
-function bars(el, items, unit) {
+function bars(el, items, unit, labelPx = 46) {
   if (!items.length) { el.innerHTML = '<div class="empty">لا توجد بيانات</div>'; return; }
   const max = Math.max(1, ...items.map(i => i.value));
   const { top, ticks } = niceScale(max);
-  const peak = items.findIndex(i => i.value === max);
-  const per = Math.max(1, Math.floor((el.clientWidth - 40) / 46));
+  const peak = max > 0 && items.some(i => i.value > 0) ? items.findIndex(i => i.value === max) : -1;
+  const per = Math.max(1, Math.floor((el.clientWidth - 40) / labelPx));
   const every = Math.ceil(items.length / per);
   el.innerHTML =
     '<div class="plot" dir="ltr">' +
@@ -417,14 +433,27 @@ function renderKPIs(f) {
     `<div class="kpi" style="--c:${c}"><div class="ic">${ic}</div><div class="lbl">${l}</div><div class="val">${v}</div><div class="sub">${s}</div></div>`).join('');
 }
 
-function renderCharts(f) {
-  // hour of day
+// Registrations of ONE exact day, hour by hour (the day is chosen with the date picker / buttons).
+let shownDay = '';
+function renderDayHours(f) {
+  const day = state.day || (f.length ? f[0].reg.slice(0, 10) : '');   // f is newest-first
+  shownDay = day;
+  $('#dayPick').value = day;
   const hours = Array(24).fill(0);
-  f.forEach(r => hours[+r.reg.slice(11, 13)]++);
-  const hItems = hours.map((v, h) => ({ label: String(h).padStart(2, '0'), value: v, tip: `الساعة ${String(h).padStart(2, '0')}:00` }));
-  bars($('#hourChart'), hItems, 'تسجيل');
-  const hp = hours.indexOf(Math.max(...hours));
-  $('#hourNote').textContent = f.length ? `ذروة التسجيل عند الساعة ${String(hp).padStart(2, '0')}:00` : '';
+  if (day) for (const r of f) if (r.reg.startsWith(day)) hours[+r.reg.slice(11, 13)]++;
+  const hh = h => String(h).padStart(2, '0');
+  const items = hours.map((v, h) => ({ label: hh(h), value: v, tip: `${day} · الساعة ${hh(h)}:00` }));
+  bars($('#hourChart'), items, 'تسجيل', 24);
+  const total = hours.reduce((a, b) => a + b, 0);
+  const peakH = hours.indexOf(Math.max(...hours));
+  const weekday = day ? new Date(day + 'T00:00:00Z').toLocaleDateString('ar', { weekday: 'long', timeZone: 'UTC' }) : '';
+  $('#hourNote').innerHTML = !day ? '' : total
+    ? `<b>${weekday} <bdi dir="ltr">${day}</bdi></b> — إجمالي ${fmt(total)} تسجيل · الذروة الساعة <bdi dir="ltr">${hh(peakH)}:00</bdi> (${fmt(hours[peakH])} تسجيل)`
+    : `<b>${weekday} <bdi dir="ltr">${day}</bdi></b> — لا توجد تسجيلات في هذا اليوم`;
+}
+
+function renderCharts(f) {
+  renderDayHours(f);
 
   // registrations over time: per day for short ranges, per month once the range gets long
   let minD = '9999', maxD = '0';
@@ -511,9 +540,21 @@ $('#q').addEventListener('input', e => { clearTimeout(timer); timer = setTimeout
 $('#op').addEventListener('change', e => { state.op = e.target.value; state.page = 0; update(); });
 $('#st').addEventListener('change', e => { state.st = e.target.value; state.page = 0; update(); });
 $('#reset').addEventListener('click', () => {
-  Object.assign(state, { q: '', op: '', st: '', sort: 'reg', dir: -1, page: 0 });
+  Object.assign(state, { q: '', op: '', st: '', sort: 'reg', dir: -1, page: 0, day: null });
   $('#q').value = ''; $('#op').value = ''; $('#st').value = ''; update();
 });
+const iso = d => new Date(d).toISOString().slice(0, 10);
+const pickDay = d => { state.day = d || null; renderDayHours(filterRows()); };
+$('#dayPrev').addEventListener('click', () => pickDay(iso(Date.parse(shownDay + 'T00:00:00Z') - DAY)));
+$('#dayNext').addEventListener('click', () => pickDay(iso(Date.parse(shownDay + 'T00:00:00Z') + DAY)));
+$('#dayLatest').addEventListener('click', () => pickDay(null));
+$('#dayPick').addEventListener('change', e => pickDay(e.target.value));
+$('#dayTop').addEventListener('click', () => {
+  const c = {}; let best = '', max = 0;
+  for (const r of filterRows()) { const d = r.reg.slice(0, 10); const n = (c[d] = (c[d] || 0) + 1); if (n > max) { max = n; best = d; } }
+  if (best) pickDay(best);
+});
+$('#dayPick').min = iso(firstReg); $('#dayPick').max = iso(lastReg);
 $('#thead').addEventListener('click', e => {
   const th = e.target.closest('th[data-sort]'); if (!th) return;
   const k = th.dataset.sort;
